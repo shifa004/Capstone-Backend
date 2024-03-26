@@ -18,6 +18,7 @@ const { OpenAIClient, AzureKeyCredential } = require("@azure/openai");
 const mime = require('mime-types');
 var FormData = require('form-data');
 const axios = require('axios');
+const WebSocket = require('ws');
 
 //Models
 const UserModel = require('./models/Users')
@@ -512,11 +513,11 @@ app.post("/chat", upload.single('file'), async(req, res) => {
         if (prompt) {
             console.log("== Streaming Chat Completions Sample ==");
             //Chat Completions
-            // const client = new OpenAIClient(endpoint, new AzureKeyCredential(azureApiKey));
-            // const jsonFile = "./prompts.json"
-            // const fileData = await readFile(jsonFile, 'utf8');
-            // const prompts = JSON.parse(fileData);
-            // prompts[prompts.length -1]['content'] = prompt;
+            const client = new OpenAIClient(endpoint, new AzureKeyCredential(azureApiKey));
+            const jsonFile = "./prompts.json"
+            const fileData = await readFile(jsonFile, 'utf8');
+            const prompts = JSON.parse(fileData);
+            prompts[prompts.length -1]['content'] = prompt;
 
             // const result = await client.getChatCompletions(deploymentName, prompts,
             // {
@@ -532,34 +533,42 @@ app.post("/chat", upload.single('file'), async(req, res) => {
             //     res.send(choice.message.content);
             // }
 
-            const events = await client.streamChatCompletions(deploymentName, prompts,
-                { 
-                    maxTokens: 128 
-                },
-            );
-            
-            const stream = new ReadableStream({
-                async start(controller) {
-                    for await (const event of events) {
-                        controller.enqueue(event);
+            try {
+                // Fetch chat completions and start streaming
+                const events = await client.streamChatCompletions(deploymentName, prompts, {
+                  maxTokens: 128
+                });
+              
+                // Set SSE headers
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+              
+                // Handle the chat completions data
+                for await (const event of events) {
+                  for (const choice of event.choices) {
+                    // Check if the choice has content and send it to the client
+                    if (choice.delta && choice.delta.content) {
+                        res.write(`data: ${JSON.stringify(choice.delta.content)}\n\n`);
                     }
-                controller.close();
-                },
-            });
-             
-            const reader = stream.getReader();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    break;
+                  }
                 }
-                for (const choice of value.choices) {
-                    if (choice.delta?.content !== undefined) {
-                        res.send(choice.delta?.content);
-                    }
-                }
-            }
-        }   
+              
+                // End the response when streaming is complete
+                res.end();
+              } catch (error) {
+                // Handle errors and send an appropriate response
+                console.error('Error occurred while fetching chat completions:', error);
+                res.status(500).json({ error: 'Internal Server Error' });
+              }
+              
+
+            // for await (const event of events) {
+            //     for (const choice of event.choices) {
+            //         console.log(choice.delta?.content);
+            //     }
+            // }
+        }       
     }
     catch(err){
         res.status(500).send(err)
